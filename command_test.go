@@ -80,3 +80,92 @@ func TestTreeIsInspectable(t *testing.T) {
 		t.Error("findSub(\"nope\") should be nil")
 	}
 }
+
+// TestValidateRejectBadFlags enumerates every way a flag declaration can be
+// wrong. Each case is a tree a developer could plausibly write by accident.
+//
+// The assertion is only "an error came back", not which message: the messages
+// are for humans and will be reworded, while the set of rejected shapes is the
+// actual contract. Pinning the text here would make every wording improvement
+// look like a behavior change.
+func TestValidateRejectBadFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		root *Command
+	}{
+		{
+			name: "duplicate long name",
+			root: &Command{Name: "app", Flags: []Flag{
+				{Name: "force", Type: Bool},
+				{Name: "force", Type: Bool},
+			}},
+		},
+		{
+			name: "short flag longer than one character",
+			root: &Command{Name: "app", Flags: []Flag{
+				{Name: "force", Short: "fo", Type: Bool},
+			}},
+		},
+		{
+			name: "duplicate short name",
+			root: &Command{Name: "app", Flags: []Flag{
+				{Name: "force", Short: "f", Type: Bool},
+				{Name: "fast", Short: "f", Type: Bool},
+			}},
+		},
+		{
+			name: "choices on a bool flag",
+			root: &Command{Name: "app", Flags: []Flag{
+				{Name: "force", Type: Bool, Choices: []string{"yes", "no"}},
+			}},
+		},
+		{
+			name: "default type does not match flag type",
+			root: &Command{Name: "app", Flags: []Flag{
+				{Name: "priority", Type: Int, Default: "high"},
+			}},
+		},
+		{
+			name: "empty flag name",
+			root: &Command{Name: "app", Flags: []Flag{
+				{Name: "", Type: Bool},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		// A subtest per case so a failure names the shape that slipped through,
+		// instead of reporting "one of six trees was accepted".
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.root.Validate(); err == nil {
+				t.Fatalf("Validate() = nil, want an error for %q", tt.name)
+			}
+		})
+	}
+}
+
+// TestValidateAcceptWellFormedTree is the counterweight to the table above.
+//
+// Without it, a Validate that returned an error unconditionally would pass
+// every negative case. Any suite built from rejections needs at least one
+// acceptance, or it is only testing that the function is pessimistic.
+func TestValidateAcceptWellFormedTree(t *testing.T) {
+	root := &Command{
+		Name: "app",
+		Flags: []Flag{
+			{Name: "verbose", Short: "v", Type: Bool, Default: false},
+		},
+		Sub: []*Command{
+			{Name: "serve", Flags: []Flag{
+				{Name: "port", Short: "p", Type: Int, Default: 8080},
+			}},
+		},
+	}
+
+	// Note this passes today even though validate never descends into Sub:
+	// nothing in the subtree is wrong. It only becomes a real test of the
+	// recursion once the next task makes validate walk the children.
+	if err := root.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}

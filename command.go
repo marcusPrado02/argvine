@@ -6,6 +6,10 @@
 // added to the tree shows up in all three without anyone editing three places.
 package argvine
 
+import (
+	"fmt"
+)
+
 // FlagType enumerates the value types a Flag can hold.
 //
 // The type is what decides whether a flag consumes the token that follows it
@@ -131,6 +135,112 @@ func (c *Command) findSub(name string) *Command {
 		if s.Name == name {
 			return s
 		}
+	}
+	return nil
+}
+
+// Validate walks the tree and reports the first structural problem it finds.
+//
+// Call it once at startup, before any Parse. Every error it returns is a
+// programming error in the CLI definition, never a usage error by whoever ran
+// the CLI — which is exactly why it lives outside Parse. Run inside Parse, a
+// malformed tree would come back as an ordinary error, indistinguishable from
+// a mistyped flag, and the user would be shown a message only the developer
+// could act on.
+//
+// It is also the safety net for the one weak spot of the Context design:
+// flag names are strings, so ctx.Int("prot") only fails at runtime. Validate
+// catches the declaration-side half of that class of mistake at boot.
+func (c *Command) Validate() error {
+	return c.validate(nil)
+}
+
+// validate is the recursive half of Validate. inherited carries the persistent
+// flags accumulated from every ancestor, so a child can be checked against
+// names it did not declare but will nonetheless see.
+//
+// It returns the first problem rather than collecting all of them: this runs at
+// startup and stops the program, so the developer fixes one and re-runs. A list
+// of errors would cost complexity for no gain in that loop.
+func (c *Command) validate(inherited []Flag) error {
+	// Seed the seen-sets with what this command inherits, so a child that
+	// redeclares an ancestor's persistent flag is caught as a duplicate.
+	seenName := make(map[string]bool, len(inherited)+len(c.Flags))
+	seenShort := make(map[string]bool, len(inherited)+len(c.Flags))
+	for _, f := range inherited {
+		seenName[f.Name] = true
+		if f.Short != "" {
+			seenShort[f.Short] = true
+		}
+	}
+
+	for _, f := range c.Flags {
+		if f.Name == "" {
+			return fmt.Errorf("argvine: command %q declares a flag with an empty name", c.Name)
+		}
+		// One message covers both duplicate and shadowing because the fix is
+		// the same in either case: rename one of the two.
+		if seenName[f.Name] {
+			return fmt.Errorf("argvine: command %q declares --%s twice, or shadows an inherited flag of the same name", c.Name, f.Name)
+		}
+		seenName[f.Name] = true
+
+		if f.Short != "" {
+			// A multi-character Short would be indistinguishable from a group
+			// of single-character flags once parsing starts: "-fo" has to mean
+			// -f -o, so it can never also mean a flag named "fo".
+			if len(f.Short) != 1 {
+				return fmt.Errorf("argvine: command %q flag --%s has short %q; short flags are exactly one character", c.Name, f.Name, f.Short)
+			}
+			if seenShort[f.Short] {
+				return fmt.Errorf("argvine: command %q reuses short flag -%s", c.Name, f.Short)
+			}
+			seenShort[f.Short] = true
+		}
+
+		// A bool flag has exactly two possible values, so restricting them is
+		// either a no-op or a contradiction. Reaching for Choices here almost
+		// always means the Type field was meant to be String.
+		if f.Type == Bool && f.Choices != nil {
+			return fmt.Errorf("argvine: command %q flag --%s is bool but declares Choices", c.Name, f.Name)
+		}
+		if err := checkDefault(c.Name, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkDefault verifies that a flag's Default matches its declared Type.
+//
+// Default is `any`, so nothing stops {Type: Int, Default: "high"} from
+// compiling. Left unchecked it would surface much later as a panic inside
+// Context.Int, at a call site that has nothing to do with the declaration that
+// caused it. Catching it here turns a confusing runtime panic into a startup
+// message that names the command and the flag.
+//
+// A nil Default is legal: it means "no default", and Parse seeds the type's
+// zero value instead.
+func checkDefault(cmdName string, f Flag) error {
+	if f.Default == nil {
+		return nil
+	}
+
+	// The comma-ok form of the type assertion is the whole check: the value is
+	// discarded, only the assertion's success matters.
+	var ok bool
+	switch f.Type {
+	case Bool:
+		_, ok = f.Default.(bool)
+	case String:
+		_, ok = f.Default.(string)
+	case Int:
+		_, ok = f.Default.(int)
+	}
+	if !ok {
+		// %s prints the declared type via FlagType.String, %T the actual one:
+		// "is int but its Default is string" reads as the fix itself.
+		return fmt.Errorf("argvine: command %q flag --%s is %s but its Default is %T", cmdName, f.Name, f.Type, f.Default)
 	}
 	return nil
 }
