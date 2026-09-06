@@ -162,10 +162,98 @@ func TestValidateAcceptWellFormedTree(t *testing.T) {
 		},
 	}
 
-	// Note this passes today even though validate never descends into Sub:
-	// nothing in the subtree is wrong. It only becomes a real test of the
-	// recursion once the next task makes validate walk the children.
 	if err := root.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+// TestValidateRejectsBadArgsAndSubs covers the rules about shape rather than
+// about flags: positional arity, subcommand names, and the fact that validate
+// now walks the whole tree instead of only the root.
+//
+// The last two cases carry the most weight. "invalid flag inside a nested
+// subcommand" fails only if the recursion reaches depth two, and "subcommand
+// short flag collides with an inherited persistent flag" fails only if
+// persistent flags are actually threaded down. Both would pass silently
+// against the non-recursive validate written in the previous task, which is
+// what makes them a real test of this one.
+func TestValidateRejectsBadArgsAndSubs(t *testing.T) {
+	tests := []struct {
+		name string
+		root *Command
+	}{
+		{
+			name: "Many arity not on the last arg",
+			root: &Command{Name: "app", Args: []Arg{
+				{Name: "ids", Arity: Many},
+				{Name: "target", Arity: One},
+			}},
+		},
+		{
+			name: "empty arg name",
+			root: &Command{Name: "app", Args: []Arg{
+				{Name: "", Arity: One},
+			}},
+		},
+		{
+			name: "duplicate subcommand name",
+			root: &Command{Name: "app", Sub: []*Command{
+				{Name: "serve"},
+				{Name: "serve"},
+			}},
+		},
+		{
+			name: "invalid flag inside a nested subcommand",
+			root: &Command{Name: "app", Sub: []*Command{
+				{Name: "remote", Sub: []*Command{
+					{Name: "add", Flags: []Flag{{Name: "force", Short: "fo", Type: Bool}}},
+				}},
+			}},
+		},
+		{
+			name: "subcommand short flag collides with an inherited persistent flag",
+			root: &Command{
+				Name:  "app",
+				Flags: []Flag{{Name: "verbose", Short: "v", Type: Bool, Persistent: true}},
+				Sub: []*Command{
+					{Name: "serve", Flags: []Flag{{Name: "version", Short: "v", Type: Bool}}},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.root.Validate(); err == nil {
+				t.Fatalf("Validate() = nil, want an error for %s", tt.name)
+			}
+		})
+	}
+}
+
+// TestValidateSiblingsDoNotShareInheritance pins the direction of inheritance:
+// flags flow down from a parent, never sideways between siblings.
+//
+// build declares -o as persistent and serve declares its own -o. They are only
+// a collision if serve can somehow see build's flags — which it must not, since
+// nobody typing "app serve" has any way to reach a flag that belongs to
+// "app build".
+//
+// This is a regression guard, not a bug reproduction. It passes against the
+// naive `next := inherited` too, because each child receives its own slice
+// length and never reads past it. It is here to fail loudly if someone later
+// "optimizes" the inheritance by sharing a single accumulator across the walk.
+func TestValidateSiblingsDoNotShareInheritance(t *testing.T) {
+	root := &Command{
+		Name:  "app",
+		Flags: []Flag{{Name: "verbose", Short: "v", Type: Bool, Persistent: true}},
+		Sub: []*Command{
+			{Name: "build", Flags: []Flag{{Name: "output", Short: "o", Type: String, Persistent: true}}},
+			{Name: "serve", Flags: []Flag{{Name: "open", Short: "o", Type: Bool}}},
+		},
+	}
+
+	if err := root.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil: -o on serve must not collide with -o on its sibling build", err)
 	}
 }

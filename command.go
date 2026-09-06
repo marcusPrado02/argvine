@@ -208,6 +208,58 @@ func (c *Command) validate(inherited []Flag) error {
 			return err
 		}
 	}
+
+	for i, a := range c.Args {
+		if a.Name == "" {
+			return fmt.Errorf("argvine: command %q declares a positional with an empty name", c.Name)
+		}
+		// Many absorbs every remaining token, so anything declared after it
+		// could never be filled. And there is no rule that would make the shape
+		// unambiguous anyway: with {tags: Many}, {name: One} and three tokens,
+		// both "tags=[a] name=b" and "tags=[a b] name=c" are defensible.
+		// Rejecting the declaration is cheaper than inventing a tie-breaker.
+		if a.Arity == Many && i != len(c.Args)-1 {
+			return fmt.Errorf("argvine: command %q declares <%s> with Many arity but it is not the last positional", c.Name, a.Name)
+		}
+	}
+
+	seenSub := make(map[string]bool, len(c.Sub))
+	for _, s := range c.Sub {
+		if s.Name == "" {
+			return fmt.Errorf("argvine: command %q declares a subcommand with an empty name", c.Name)
+		}
+		// Duplicates would make routing depend on declaration order, which is
+		// invisible to the person typing the command.
+		if seenSub[s.Name] {
+			return fmt.Errorf("argvine: command %q declares subcommand %q twice", c.Name, s.Name)
+		}
+		seenSub[s.Name] = true
+	}
+
+	// Build what the children inherit: whatever this node already inherited,
+	// plus its own persistent flags.
+	//
+	// Copy rather than `next := inherited`. The naive version appends into the
+	// caller's backing array whenever it has spare capacity, which makes this
+	// function's correctness depend on how a caller several frames up built its
+	// slice. It happens not to produce a wrong read in this particular walk —
+	// each child receives its own length and never looks past it — but owning
+	// the array is what keeps the reasoning local, and this runs once at startup.
+	next := make([]Flag, len(inherited), len(inherited)+len(c.Flags))
+	copy(next, inherited)
+	for _, f := range c.Flags {
+		if f.Persistent {
+			next = append(next, f)
+		}
+	}
+
+	// Recursing last means a node's own problems are reported before its
+	// children's, so the first error points at the outermost mistake.
+	for _, s := range c.Sub {
+		if err := s.validate(next); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
