@@ -146,9 +146,16 @@ func Parse(root *Command, argv []string) (*Context, error) {
 
 	p.ctx.Cmd = p.cur
 	p.ctx.rawPositional = p.positional
-	// Defaults are seeded last, so an explicit value on the command line is
-	// never overwritten by the declaration it came from.
+
+	// Both finishing steps run only after the last token is read, and that is
+	// forced by the question each one answers. "This flag was never given" and
+	// "this argument was never filled" are only true statements once there is
+	// no more argv left to contradict them.
+	//
+	// Defaults before binding, and both after the walk: an explicit value on
+	// the command line is never overwritten by the declaration it came from.
 	p.seedDefaults()
+	p.bindArgs()
 	return p.ctx, nil
 }
 
@@ -372,4 +379,27 @@ func (p *parser) descend(sub *Command) {
 	p.declared = append(p.declared, sub.Flags...)
 	p.collectPersistent(sub)
 	p.i++
+}
+
+// bindArgs assigns the collected positional tokens to the current command's
+// declared Args, in declaration order.
+//
+// Every declared Arg gets an entry even when nothing filled it — a nil slice
+// rather than a missing key. That is what lets Context.Arg distinguish "this
+// argument is declared and absent" (returns "") from "this name was never
+// declared" (panics): after Parse, a missing key can only be a typo.
+//
+// This version handles One arity only, and stays silent when an argument is
+// missing or a token is left over. ZeroOrOne, Many and the errors for both
+// arrive with the typed usage errors in the next milestone. Keeping it naive
+// here is deliberate: the acceptance test can pass before error handling exists
+// to complicate it.
+func (p *parser) bindArgs() {
+	for i, a := range p.cur.Args {
+		if i < len(p.positional) {
+			p.ctx.args[a.Name] = []string{p.positional[i]}
+			continue
+		}
+		p.ctx.args[a.Name] = nil
+	}
 }

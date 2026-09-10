@@ -1,6 +1,7 @@
 package argvine
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -342,5 +343,78 @@ func TestParseSubCommandAfterPositionalIsPositional(t *testing.T) {
 	}
 	if ctx.Cmd.Name != "task" {
 		t.Errorf("Cmd.Name = %q, want \"task\": routing must not resume after a positional", ctx.Cmd.Name)
+	}
+}
+
+// TestAcceptance1 is the spec's starred acceptance test, and the gate for this
+// milestone.
+//
+// The three orders are the point. They are the same six pieces of information
+// arranged three ways, and all three must produce an identical Context:
+//
+//	remote add --force -v origin https://x     flags first
+//	remote add origin --force https://x -v     interleaved
+//	remote add -vf origin https://x            flags grouped into one token
+//
+// That commutativity is not something the parser was told to do; it falls out
+// of classifying each token independently of what came before. Only two pieces
+// of state break the symmetry — the "--" terminator and "no positional seen
+// yet" — and neither is exercised here.
+//
+// Validate is called first on purpose: an acceptance test written against a
+// malformed tree would be testing the wrong thing, and would fail in a way that
+// looks like a parser bug.
+func TestAcceptance1(t *testing.T) {
+	root := remoteTree()
+	if err := root.Validate(); err != nil {
+		t.Fatalf("the acceptance tree must be valid: %v", err)
+	}
+
+	orders := [][]string{
+		{"remote", "add", "--force", "-v", "origin", "https://x"},
+		{"remote", "add", "origin", "--force", "https://x", "-v"},
+		{"remote", "add", "-vf", "origin", "https://x"},
+	}
+
+	for _, argv := range orders {
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			ctx, err := Parse(root, argv)
+			if err != nil {
+				t.Fatalf("Parse returned %v", err)
+			}
+			if got := ctx.PathString(); got != "task remote add" {
+				t.Errorf("PathString() = %q, want \"task remote add\"", got)
+			}
+			if !ctx.Bool("force") {
+				t.Error("force = false, want true")
+			}
+			if !ctx.Bool("verbose") {
+				t.Error("verbose = false, want true (persistent, inherited from root)")
+			}
+			if got := ctx.Arg("name"); got != "origin" {
+				t.Errorf("Arg(\"name\") = %q, want \"origin\"", got)
+			}
+			if got := ctx.Arg("url"); got != "https://x" {
+				t.Errorf("Arg(\"url\") = %q, want \"https://x\"", got)
+			}
+		})
+	}
+}
+
+// TestAcceptance1UnknownFlagMentionsTheCommand is the other half of the spec's
+// first criterion: a rejected flag must say WHERE it was rejected.
+//
+// Asserting on the message text is normally a bad idea — wording changes are
+// not behavior changes — but the substring checked here is not wording. It is
+// the full command path, and it can only appear if the error was built with the
+// walk's Path rather than with the leaf's name. "unknown flag --nope in add"
+// would pass a naive test and leave the user hunting for which "add".
+func TestAcceptance1UnknownFlagMentionsTheCommand(t *testing.T) {
+	_, err := Parse(remoteTree(), []string{"remote", "add", "--nope"})
+	if err == nil {
+		t.Fatal("Parse should reject --nope")
+	}
+	if !strings.Contains(err.Error(), "task remote add") {
+		t.Errorf("error %q should name the full command path", err)
 	}
 }
