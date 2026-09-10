@@ -109,6 +109,10 @@ type parser struct {
 	// i is the index of the next token to read. Helpers advance it by however
 	// much they consumed, which is how a valued flag skips its own value.
 	i int
+
+	// afterTerminator latches on at the first "--" and never resets: from there
+	// to the end of argv, every token is a positional regardless of its shape.
+	afterTerminator bool
 }
 
 // Parse walks the tree consuming argv left to right and returns a fresh
@@ -141,6 +145,7 @@ func Parse(root *Command, argv []string) (*Context, error) {
 	}
 
 	p.ctx.Cmd = p.cur
+	p.ctx.rawPositional = p.positional
 	// Defaults are seeded last, so an explicit value on the command line is
 	// never overwritten by the declaration it came from.
 	p.seedDefaults()
@@ -149,17 +154,46 @@ func Parse(root *Command, argv []string) (*Context, error) {
 
 // step classifies the token at p.i and dispatches to the right handler.
 //
-// This version knows only about long flags; short flags, subcommand routing and
-// the "--" terminator are added in the tasks that follow.
+// The order of the cases is the whole specification of the syntax, and it is
+// not arbitrary: the terminator check must precede every pattern it disables,
+// and "--" must be tested before the "--" prefix or it would parse as a long
+// flag with an empty name.
+//
+// Only two pieces of state make position meaningful — afterTerminator and
+// "no positional seen yet". Everything else is classified independently of what
+// came before, which is exactly why flags and positionals can be interleaved
+// freely and still produce the same result.
 func (p *parser) step() error {
 	tok := p.argv[p.i]
+
 	switch {
-	case strings.HasPrefix(tok, "--") :
-			return p.longFlag()
+	case p.afterTerminator:
+		p.positional = append(p.positional, tok)
+		p.i++
+		return nil
+
+	case tok == "--":
+		p.afterTerminator = true
+		p.i++
+		return nil
+
+	case strings.HasPrefix(tok, "--"):
+		return p.longFlag()
+
+	// A lone "-" is the conventional name for stdin, not a flag, so the length
+	// guard keeps it out of shortGroup and lets it fall through as a positional.
 	case len(tok) > 1 && strings.HasPrefix(tok, "-"):
 		return p.shortGroup()
-	
+
 	default:
+		// A subcommand only wins while no positional has been seen. Once the
+		// user has started supplying arguments, a token that happens to match a
+		// child's name is just another argument — "task add remote" adds a task
+		// titled "remote".
+		if sub := p.cur.findSub(tok); sub != nil && len(p.positional) == 0 {
+			p.descend(sub)
+			return nil
+		}
 		p.positional = append(p.positional, tok)
 		p.i++
 		return nil
@@ -255,7 +289,17 @@ func (p *parser) seedDefaults() {
 	}
 }
 
-
+// shortGroup parses a token like "-abc", where every character is a short flag.
+//
+// The rule that makes the group unambiguous: bool flags chain freely, and the
+// first non-bool flag ENDS the group and takes its value — from whatever is
+// left in the token, or from the next token when nothing is left. This is the
+// same convention as "tar -czf archive.tar.gz", where c and z are bools and f
+// is valued.
+//
+// The user never has to know any flag's type. The order they type resolves it,
+// and the only way to write something ambiguous is to write something that was
+// already an error.
 func (p *parser) shortGroup() error {
 	chars := p.argv[p.i][1:]
 
@@ -267,11 +311,14 @@ func (p *parser) shortGroup() error {
 			return fmt.Errorf("unknown flag -%s in %q", ch, p.ctx.PathString())
 		}
 
+		// Bools do not end the group: keep walking the characters.
 		if f.Type == Bool {
 			p.set(f, true)
 			continue
 		}
 
+		// Value glued to the flag: "-p1" or "-p=1". Note chars[j+1:] is safe at
+		// the last index — it yields "", and TrimPrefix leaves it "".
 		if rest := strings.TrimPrefix(chars[j+1:], "="); rest != "" {
 			v, err := convert(f, rest)
 			if err != nil {
@@ -282,7 +329,9 @@ func (p *parser) shortGroup() error {
 			return nil
 		}
 
-
+		// Nothing left in the token, so the value is the next one. Reaching here
+		// with "-p -2" consumes "-2" as the value without ever classifying it,
+		// which is why a negative number is never mistaken for a flag.
 		if p.i+1 >= len(p.argv) {
 			return fmt.Errorf("flag -%s needs a value", ch)
 		}
@@ -294,6 +343,33 @@ func (p *parser) shortGroup() error {
 		p.i += 2
 		return nil
 	}
+
+	// Only reached when every character was a bool: the group consumed exactly
+	// one token.
 	p.i++
 	return nil
+}
+
+// descend moves the walk into a child command.
+//
+// The visible flag index is thrown away and rebuilt from scratch: inherited
+// persistent flags first, then the child's own. Rebuilding rather than adding
+// is what makes a non-persistent parent flag stop being visible here — nothing
+// has to be removed, because only what should be visible is ever put in.
+//
+// In tree code, rebuilding is usually easier to reason about than removing:
+// you do not have to know what to take out, only what to put in.
+func (p *parser) descend(sub *Command) {
+	p.cur = sub
+	p.ctx.Path = append(p.ctx.Path, sub)
+
+	p.visible = newFlagIndex()
+	p.visible.add(p.persistent)
+	p.visible.add(sub.Flags)
+
+	// declared grows along the walked path only, so seedDefaults never seeds a
+	// flag from a branch this argv did not enter.
+	p.declared = append(p.declared, sub.Flags...)
+	p.collectPersistent(sub)
+	p.i++
 }

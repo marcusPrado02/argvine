@@ -135,13 +135,19 @@ func TestParseLongFlags(t *testing.T) {
 	}
 }
 
-
-
-func testParseShortFlags(t *testing.T) {
-	root  := &Command {
+// TestParseShortFlags covers the grouping rules, which are the fiddliest part
+// of the parser and the easiest to get subtly wrong.
+//
+// The two cases that matter most are the last kind: "-p -2" must read -2 as a
+// value, and "-pabc" must read "abc" as a value that then fails conversion.
+// Both fall out of the same rule — the first non-bool ends the group — and a
+// parser that instead looked at whether a token starts with a dash would get
+// one of them wrong no matter which way it decided.
+func TestParseShortFlags(t *testing.T) {
+	root := &Command{
 		Name: "app",
 		Flags: []Flag{
-				{Name: "all", Short: "a", Type: Bool, Default: false},
+			{Name: "all", Short: "a", Type: Bool, Default: false},
 			{Name: "brief", Short: "b", Type: Bool, Default: false},
 			{Name: "color", Short: "c", Type: Bool, Default: false},
 			{Name: "priority", Short: "p", Type: Int, Default: 3},
@@ -150,9 +156,9 @@ func testParseShortFlags(t *testing.T) {
 	}
 
 	tests := []struct {
-		name string
-		argv []string
-		want map[string]any
+		name    string
+		argv    []string
+		want    map[string]any
 		wantErr bool
 	}{
 		{
@@ -187,11 +193,13 @@ func testParseShortFlags(t *testing.T) {
 		},
 		{name: "unknown short", argv: []string{"-z"}, wantErr: true},
 		{name: "valued flag with nothing after it", argv: []string{"-p"}, wantErr: true},
+		// "-pabc" is p taking "abc" as its glued value, not four flags: the
+		// first non-bool ends the group and swallows the rest of the token.
 		{name: "bad type in a group", argv: []string{"-pabc"}, wantErr: true},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T){
+		t.Run(tt.name, func(t *testing.T) {
 			ctx, err := Parse(root, tt.argv)
 			if tt.wantErr {
 				if err == nil {
@@ -209,5 +217,130 @@ func testParseShortFlags(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// remoteTree is the tree the spec's acceptance test is written against, and it
+// is deliberately shaped to exercise the hard cases in one structure:
+//
+//   - two levels of nesting (task remote add), so routing has to recurse
+//   - a persistent flag on the root (-v) that must reach the deepest leaf
+//   - a NON-persistent flag on the root (-c) that must NOT reach it
+//   - two required positionals, so binding has something to split
+//
+// A tree that only exercised one of these would let the other three regress
+// silently.
+func remoteTree() *Command {
+	return &Command{
+		Name:  "task",
+		Short: "local task manager",
+		Flags: []Flag{
+			{Name: "verbose", Short: "v", Type: Bool, Default: false,
+				Usage: "verbose output", Persistent: true},
+			{Name: "config", Short: "c", Type: String, Default: "",
+				Usage: "config path, not inherited"},
+		},
+		Sub: []*Command{
+			{
+				Name:  "remote",
+				Short: "manage remotes",
+				Sub: []*Command{
+					{
+						Name:  "add",
+						Short: "add a remote",
+						Flags: []Flag{
+							{Name: "force", Short: "f", Type: Bool, Default: false, Usage: "overwrite"},
+						},
+						Args: []Arg{
+							{Name: "name", Arity: One, Usage: "remote name"},
+							{Name: "url", Arity: One, Usage: "remote url"},
+						},
+						Run: func(ctx *Context) error { return nil },
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestParseRouting checks that a token matching a subcommand descends into it
+// rather than being collected as a positional, and that the walk records where
+// it ended up.
+//
+// Path matters as much as Cmd: an error message that says "add" without saying
+// "task remote add" leaves the user with no idea where that command lives.
+func TestParseRouting(t *testing.T) {
+	root := remoteTree()
+
+	ctx, err := Parse(root, []string{"remote", "add", "origin", "https://x"})
+	if err != nil {
+		t.Fatalf("Parse returned %v", err)
+	}
+	if got := ctx.PathString(); got != "task remote add" {
+		t.Errorf("PathString() = %q, want \"task remote add\"", got)
+	}
+	if ctx.Cmd.Name != "add" {
+		t.Errorf("Cmd.Name = %q, want \"add\"", ctx.Cmd.Name)
+	}
+}
+
+// TestParsePersistentFlagIsInherited and its counterpart below are a pair, and
+// neither means much alone.
+//
+// This one proves inheritance happens: -v is declared only on the root, typed
+// two levels down, and still resolves.
+func TestParsePersistentFlagIsInherited(t *testing.T) {
+	ctx, err := Parse(remoteTree(), []string{"remote", "add", "-v", "origin", "https://x"})
+	if err != nil {
+		t.Fatalf("Parse returned %v", err)
+	}
+	if !ctx.Bool("verbose") {
+		t.Error("verbose should be true: it is persistent on the root")
+	}
+}
+
+// TestParseNonPersistFlagIsNotInherited proves inheritance is SELECTIVE, which
+// is the half that actually constrains the implementation.
+//
+// A descend that merely added the child's flags to the existing index would
+// pass the test above and fail this one: --config would stay visible forever.
+// Rebuilding the index from persistent-plus-own is what makes it disappear.
+func TestParseNonPersistFlagIsNotInherited(t *testing.T) {
+	_, err := Parse(remoteTree(), []string{"remote", "add", "--config", "x"})
+	if err == nil {
+		t.Fatal("--config is declared on the root without Persistent, so it must not be visible on \"remote add\"")
+	}
+}
+
+// TestParseTerminator pins the POSIX "--" convention: everything after it is a
+// positional, even when it looks exactly like a flag.
+//
+// Without it there is no way to pass a value that starts with a dash — a task
+// titled "--not-a-flag" would be unrepresentable. The two tokens here would
+// otherwise be an unknown long flag and an unknown short flag.
+func TestParseTerminator(t *testing.T) {
+	ctx, err := Parse(remoteTree(), []string{"remote", "add", "--", "--not-a-flag", "-x"})
+	if err != nil {
+		t.Fatalf("Parse returned %v", err)
+	}
+	want := []string{"--not-a-flag", "-x"}
+	if len(ctx.positionalsForTest()) != len(want) {
+		t.Fatalf("positionals = %v, want %v", ctx.positionalsForTest(), want)
+	}
+}
+
+// TestParseSubCommandAfterPositionalIsPositional pins the second — and last —
+// place where token order carries meaning.
+//
+// Routing stops for good at the first positional. Without that rule, a task
+// titled "remote" would silently route into the remote subcommand instead of
+// being stored, and the user would have no way to express the title at all.
+func TestParseSubCommandAfterPositionalIsPositional(t *testing.T) {
+	ctx, err := Parse(remoteTree(), []string{"origin", "remote"})
+	if err != nil {
+		t.Fatalf("Parse returned %v", err)
+	}
+	if ctx.Cmd.Name != "task" {
+		t.Errorf("Cmd.Name = %q, want \"task\": routing must not resume after a positional", ctx.Cmd.Name)
 	}
 }

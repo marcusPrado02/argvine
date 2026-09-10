@@ -24,6 +24,12 @@ type Context struct {
 	// args maps a positional Arg name to its values. A slice even for single
 	// values, so Many needs no separate storage.
 	args map[string][]string
+
+	// rawPositional holds the positional tokens in the order they appeared,
+	// before they are bound to the command's declared Args. Keeping the raw
+	// list separate from args means binding can be rewritten — arity, error
+	// reporting — without the parser knowing anything about it.
+	rawPositional []string
 }
 
 // newContext returns an empty Context with both maps ready to write into.
@@ -127,4 +133,12 @@ func (c *Context) lookupArg(name string) []string {
 		panic(fmt.Sprintf("argvine: no argument <%s> declared on %q", name, c.PathString()))
 	}
 	return v
+}
+
+// positionalsForTest exposes the raw positional tokens to the package's own
+// tests. It is not part of the public API, and the name says so on purpose:
+// nothing outside the package can reach it, and nobody reading it inside the
+// package mistakes it for something a CLI author should call.
+func (c *Context) positionalsForTest() []string {
+	return c.rawPositional
 }
