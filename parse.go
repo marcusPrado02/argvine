@@ -153,13 +153,17 @@ func Parse(root *Command, argv []string) (*Context, error) {
 // the "--" terminator are added in the tasks that follow.
 func (p *parser) step() error {
 	tok := p.argv[p.i]
-	if strings.HasPrefix(tok, "--") {
-		return p.longFlag()
+	switch {
+	case strings.HasPrefix(tok, "--") :
+			return p.longFlag()
+	case len(tok) > 1 && strings.HasPrefix(tok, "-"):
+		return p.shortGroup()
+	
+	default:
+		p.positional = append(p.positional, tok)
+		p.i++
+		return nil
 	}
-
-	p.positional = append(p.positional, tok)
-	p.i++
-	return nil
 }
 
 // longFlag parses a token beginning with "--", in either the "--name value" or
@@ -249,4 +253,47 @@ func (p *parser) seedDefaults() {
 			p.ctx.flags[f.Name] = 0
 		}
 	}
+}
+
+
+func (p *parser) shortGroup() error {
+	chars := p.argv[p.i][1:]
+
+	for j := 0; j < len(chars); j++ {
+		ch := string(chars[j])
+
+		f, ok := p.visible.byShort[ch]
+		if !ok {
+			return fmt.Errorf("unknown flag -%s in %q", ch, p.ctx.PathString())
+		}
+
+		if f.Type == Bool {
+			p.set(f, true)
+			continue
+		}
+
+		if rest := strings.TrimPrefix(chars[j+1:], "="); rest != "" {
+			v, err := convert(f, rest)
+			if err != nil {
+				return err
+			}
+			p.set(f, v)
+			p.i++
+			return nil
+		}
+
+
+		if p.i+1 >= len(p.argv) {
+			return fmt.Errorf("flag -%s needs a value", ch)
+		}
+		v, err := convert(f, p.argv[p.i+1])
+		if err != nil {
+			return err
+		}
+		p.set(f, v)
+		p.i += 2
+		return nil
+	}
+	p.i++
+	return nil
 }

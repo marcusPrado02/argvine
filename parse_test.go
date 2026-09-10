@@ -1,6 +1,8 @@
 package argvine
 
-import "testing"
+import (
+	"testing"
+)
 
 // TestConvert covers the one place a raw command-line token becomes a typed
 // value. Everything downstream trusts it, so the edge cases live here rather
@@ -128,6 +130,83 @@ func TestParseLongFlags(t *testing.T) {
 			}
 			if got := ctx.Int("port"); got != tt.wantPort {
 				t.Errorf("port = %d, want %d", got, tt.wantPort)
+			}
+		})
+	}
+}
+
+
+
+func testParseShortFlags(t *testing.T) {
+	root  := &Command {
+		Name: "app",
+		Flags: []Flag{
+				{Name: "all", Short: "a", Type: Bool, Default: false},
+			{Name: "brief", Short: "b", Type: Bool, Default: false},
+			{Name: "color", Short: "c", Type: Bool, Default: false},
+			{Name: "priority", Short: "p", Type: Int, Default: 3},
+			{Name: "output", Short: "o", Type: String, Default: ""},
+		},
+	}
+
+	tests := []struct {
+		name string
+		argv []string
+		want map[string]any
+		wantErr bool
+	}{
+		{
+			name: "single bool",
+			argv: []string{"-a"},
+			want: map[string]any{"all": true, "brief": false, "priority": 3},
+		},
+		{
+			name: "grouped bools",
+			argv: []string{"-abc"},
+			want: map[string]any{"all": true, "brief": true, "color": true},
+		},
+		{
+			name: "group ending in a valued flag, value in the next token",
+			argv: []string{"-ap", "1"},
+			want: map[string]any{"all": true, "priority": 1},
+		},
+		{
+			name: "group ending in a valued flag, value glued to it",
+			argv: []string{"-ap1"},
+			want: map[string]any{"all": true, "priority": 1},
+		},
+		{
+			name: "valued flag with an equals sign",
+			argv: []string{"-o=report.txt"},
+			want: map[string]any{"output": "report.txt"},
+		},
+		{
+			name: "negative value is not mistaken for a flag",
+			argv: []string{"-p", "-2"},
+			want: map[string]any{"priority": -2},
+		},
+		{name: "unknown short", argv: []string{"-z"}, wantErr: true},
+		{name: "valued flag with nothing after it", argv: []string{"-p"}, wantErr: true},
+		{name: "bad type in a group", argv: []string{"-pabc"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T){
+			ctx, err := Parse(root, tt.argv)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Parse(%v) = nil error, want error", tt.argv)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Parse(%v) returned %v", tt.argv, err)
+			}
+			for name, want := range tt.want {
+				got := ctx.flags[name]
+				if got != want {
+					t.Errorf("flag %q = %v (%T), want %v (%T)", name, got, got, want, want)
+				}
 			}
 		})
 	}
