@@ -155,9 +155,23 @@ func Parse(root *Command, argv []string) (*Context, error) {
 	// "this argument was never filled" are only true statements once there is
 	// no more argv left to contradict them.
 	//
-	// Defaults before binding, and both after the walk: an explicit value on
-	// the command line is never overwritten by the declaration it came from.
+	// Defaults before validation, and all three after the walk. The order is
+	// forced, not stylistic:
+	//
+	//	seedDefaults   → every declared flag has a value
+	//	validateFlags  → Required and Choices, now that absence is knowable
+	//	bindArgs       → positionals, now that flags are settled
+	//
+	// Swapping the first two would make Required complain about flags that have
+	// a default. Swapping the last two would report a missing argument when the
+	// real problem was a missing required flag — the wrong diagnosis for the
+	// same command line.
 	p.seedDefaults()
+
+	if err := p.validateFlags(); err != nil {
+		return nil, err
+	}
+
 	p.bindArgs()
 	return p.ctx, nil
 }
@@ -416,4 +430,53 @@ func (p *parser) bindArgs() {
 // the same parse would otherwise change what the error reports.
 func (p *parser) at() usageError {
 	return usageError{Path: p.ctx.Path}
+}
+
+// validateFlags enforces Required and Choices over the flags declared along the
+// walked path.
+//
+// It runs after the walk, and it has to: "this flag was never given" is not a
+// true statement until the last token has been read. It also runs after
+// seedDefaults, so every declared flag already has a value to look at.
+//
+// The scope is p.declared, not the whole tree — a Required flag on a branch
+// this argv never entered is nobody's problem.
+func (p *parser) validateFlags() error {
+	for _, f := range p.declared {
+		if f.Required && !p.seen[f.Name] {
+			return &ErrMissingRequired{p.at(), f}
+		}
+
+		// Only what the user actually typed is checked. A default outside its
+		// own Choices is the CLI author's mistake, caught by Validate at
+		// startup; rejecting it here would blame the user for it.
+		if f.Choices == nil || !p.seen[f.Name] {
+			continue
+		}
+
+		// Sprint renders int and string alike, so one comparison covers every
+		// type that can carry Choices. This is a rare case where going through
+		// a string is the right call rather than a smell: Choices is declared
+		// as []string by the CLI author, so the domain of the comparison is
+		// already textual. A switch on f.Type would need three branches to
+		// reproduce this line, and each would be one more place to forget when
+		// a fourth type is added.
+		got := fmt.Sprint(p.ctx.flags[f.Name])
+		if !containsString(f.Choices, got) {
+			return &ErrBadChoice{p.at(), f, got}
+		}
+	}
+	return nil
+}
+
+// containsString is a linear scan because a Choices set is a handful of values
+// written by hand. Building a map per flag per parse would cost more than it
+// saves, and would be one more structure to keep in sync with the declaration.
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
