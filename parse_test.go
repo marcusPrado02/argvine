@@ -31,15 +31,15 @@ func TestConvert(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := convert(tt.flag, tt.raw)
+			got, ok := convert(tt.flag, tt.raw)
 			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("convert(%v, %q) = %v, want error", tt.flag.Type, tt.raw, got)
+				if ok {
+					t.Fatalf("convert(%v, %q) = %v, want failure", tt.flag.Type, tt.raw, got)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("convert(%v, %q) returned %v", tt.flag.Type, tt.raw, err)
+			if !ok {
+				t.Fatalf("convert(%v, %q) failed", tt.flag.Type, tt.raw)
 			}
 			if got != tt.want {
 				t.Errorf("convert(%v, %q) = %v (%T), want %v (%T)", tt.flag.Type, tt.raw, got, got, tt.want, tt.want)

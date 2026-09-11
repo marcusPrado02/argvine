@@ -41,34 +41,37 @@ func (x flagIndex) add(flags []Flag) {
 	}
 }
 
-// convert turns a raw command-line token into the flag's declared type.
+// convert turns a raw command-line token into the flag's declared type. The
+// second result is false when the token does not convert.
 //
-// It takes the whole Flag rather than just its FlagType so it can name the flag
-// in the error. The function that detects a problem is the one with the most
-// context to describe it; making the caller rebuild that context would mean
-// writing the same message in two places.
-func convert(f Flag, raw string) (any, error) {
+// It reports a bool rather than an error because it cannot build a good one:
+// the message a user should see names the command the flag appeared on, and
+// convert has no idea where in the tree it is being called from. The caller
+// does, so the caller constructs the ErrBadType.
+//
+// This is the mirror image of the rule that the function detecting a problem
+// should describe it — here the detector genuinely lacks the context, so it
+// reports the fact and stays out of the wording.
+func convert(f Flag, raw string) (any, bool) {
 	switch f.Type {
 	case String:
-		return raw, nil
+		return raw, true
 
 	case Int:
 		n, err := strconv.Atoi(raw)
 		if err != nil {
-			// The wrapped strconv error is dropped on purpose: "parsing \"abc\":
-			// invalid syntax" is about strconv, not about the user's command line.
-			return nil, fmt.Errorf("invalid value %q for --%s: expected an integer", raw, f.Name)
+			return nil, false
 		}
-		return n, nil
+		return n, true
 
 	case Bool:
 		// ParseBool is deliberately liberal — 1, t, T, TRUE, true, and their
 		// false counterparts — which matches what people expect from --flag=1.
 		b, err := strconv.ParseBool(raw)
 		if err != nil {
-			return nil, fmt.Errorf("invalid value %q for --%s: expected true or false", raw, f.Name)
+			return nil, false
 		}
-		return b, nil
+		return b, true
 
 	default:
 		// Unreachable for any tree that passed Validate. Reaching it means the
@@ -216,7 +219,7 @@ func (p *parser) longFlag() error {
 
 	f, ok := p.visible.byName[name]
 	if !ok {
-		return fmt.Errorf("unknown flag --%s in %q", name, p.ctx.PathString())
+		return &ErrUnknownFlag{p.at(), "--" + name}
 	}
 
 	// The declared type, never the next token, decides consumption. A parser
@@ -233,15 +236,15 @@ func (p *parser) longFlag() error {
 	raw, consumed := inline, 1
 	if !hasInline {
 		if p.i+1 >= len(p.argv) {
-			return fmt.Errorf("flag --%s needs a value", f.Name)
+			return &ErrMissingValue{p.at(), f}
 		}
 		// Two tokens consumed: the flag and its value.
 		raw, consumed = p.argv[p.i+1], 2
 	}
 
-	v, err := convert(f, raw)
-	if err != nil {
-		return err
+	v, ok := convert(f, raw)
+	if !ok {
+		return &ErrBadType{p.at(), f, raw}
 	}
 	p.set(f, v)
 	p.i += consumed
@@ -315,7 +318,7 @@ func (p *parser) shortGroup() error {
 
 		f, ok := p.visible.byShort[ch]
 		if !ok {
-			return fmt.Errorf("unknown flag -%s in %q", ch, p.ctx.PathString())
+			return &ErrUnknownFlag{p.at(), "-" + ch}
 		}
 
 		// Bools do not end the group: keep walking the characters.
@@ -327,9 +330,9 @@ func (p *parser) shortGroup() error {
 		// Value glued to the flag: "-p1" or "-p=1". Note chars[j+1:] is safe at
 		// the last index — it yields "", and TrimPrefix leaves it "".
 		if rest := strings.TrimPrefix(chars[j+1:], "="); rest != "" {
-			v, err := convert(f, rest)
-			if err != nil {
-				return err
+			v, ok := convert(f, rest)
+			if !ok {
+				return &ErrBadType{p.at(), f, rest}
 			}
 			p.set(f, v)
 			p.i++
@@ -340,12 +343,13 @@ func (p *parser) shortGroup() error {
 		// with "-p -2" consumes "-2" as the value without ever classifying it,
 		// which is why a negative number is never mistaken for a flag.
 		if p.i+1 >= len(p.argv) {
-			return fmt.Errorf("flag -%s needs a value", ch)
+			return &ErrMissingValue{p.at(), f}
 		}
-		v, err := convert(f, p.argv[p.i+1])
-		if err != nil {
-			return err
+		v, ok := convert(f, p.argv[p.i+1])
+		if !ok {
+			return &ErrBadType{p.at(), f, p.argv[p.i+1]}
 		}
+
 		p.set(f, v)
 		p.i += 2
 		return nil
@@ -402,4 +406,14 @@ func (p *parser) bindArgs() {
 		}
 		p.ctx.args[a.Name] = nil
 	}
+}
+
+// at captures where the walk currently is, for embedding in a usage error.
+//
+// It reads Path rather than cur because an error should name the whole
+// invocation — "task remote add", not "add". Calling it at the moment the
+// problem is detected is what keeps the snapshot accurate: a descent later in
+// the same parse would otherwise change what the error reports.
+func (p *parser) at() usageError {
+	return usageError{Path: p.ctx.Path}
 }
