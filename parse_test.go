@@ -9,9 +9,13 @@ import (
 // value. Everything downstream trusts it, so the edge cases live here rather
 // than being retested through Parse.
 //
-// "negative int parses" is the case worth staring at: -3 is a perfectly good
-// value, which is why the parser must never decide "starts with a dash, so it
-// cannot be a value".
+// EN — "negative int parses" is the case worth staring at: -3 is a perfectly
+// good value, which is why the parser must never decide "starts with a dash, so
+// it cannot be a value".
+//
+// PT — "negative int parses" é o caso que merece atenção: -3 é um valor
+// perfeitamente bom, e é por isso que o parser nunca pode decidir "começa com
+// hífen, logo não pode ser valor".
 func TestConvert(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -49,10 +53,15 @@ func TestConvert(t *testing.T) {
 
 }
 
-// TestFlagIndex checks the lookup structure the parser consults for every
-// token. The third assertion is the one that earns its place: a flag with no
-// short form must not register an empty key, or the first such flag would
-// claim "" and every later one would silently overwrite it.
+// TestFlagIndex checks the lookup structure the parser consults for every token.
+//
+// EN — The third assertion is the one that earns its place: a flag with no
+// short form must not register an empty key, or the first such flag would claim
+// "" and every later one would silently overwrite it.
+//
+// PT — A terceira asserção é a que justifica seu lugar: uma flag sem forma curta
+// não pode registrar chave vazia, senão a primeira delas reivindicaria "" e todas
+// as seguintes a sobrescreveriam em silêncio.
 func TestFlagIndex(t *testing.T) {
 	idx := newFlagIndex()
 	idx.add([]Flag{
@@ -73,13 +82,22 @@ func TestFlagIndex(t *testing.T) {
 
 // TestParseLongFlags drives Parse end to end over one flat command.
 //
-// One tree, many argv lines: this is the shape the whole design was chosen to
-// allow. It only works because Parse writes nothing back into root, so the
+// EN — One tree, many argv lines: this is the shape the whole design was chosen
+// to allow. It only works because Parse writes nothing back into root, so the
 // nine cases below share a tree without contaminating each other. Had flags
 // been parsed into pre-allocated pointers, each case would need its own tree.
 //
 // Every case asserts all three flags, not just the one it exercises, so a
 // change that leaks a value across flags cannot hide.
+//
+// PT — Uma árvore, vários argv: esta é a forma que o design inteiro foi
+// escolhido para permitir. Só funciona porque o Parse não escreve nada de volta
+// em root, então os nove casos abaixo compartilham uma árvore sem se contaminar.
+// Se as flags fossem parseadas em ponteiros pré-alocados, cada caso precisaria
+// da própria árvore.
+//
+// Todo caso afirma as três flags, não só a que exercita, para que uma mudança
+// que vaze valor entre flags não consiga se esconder.
 func TestParseLongFlags(t *testing.T) {
 	root := &Command{
 		Name: "app",
@@ -116,8 +134,10 @@ func TestParseLongFlags(t *testing.T) {
 				if err == nil {
 					t.Fatalf("Parse(%v) = nil error, want error", tt.argv)
 				}
-				// The error case ends here: there is no ctx to inspect, and
-				// falling through would hit the success assertions below.
+				// EN: The error case ends here — there is no ctx to inspect,
+				// and falling through would hit the success assertions below.
+				// PT: O caso de erro termina aqui — não há ctx para inspecionar,
+				// e cair adiante bateria nas asserções de sucesso abaixo.
 				return
 			}
 			if err != nil {
@@ -136,14 +156,20 @@ func TestParseLongFlags(t *testing.T) {
 	}
 }
 
-// TestParseShortFlags covers the grouping rules, which are the fiddliest part
-// of the parser and the easiest to get subtly wrong.
+// TestParseShortFlags covers the grouping rules, which are the fiddliest part of
+// the parser and the easiest to get subtly wrong.
 //
-// The two cases that matter most are the last kind: "-p -2" must read -2 as a
-// value, and "-pabc" must read "abc" as a value that then fails conversion.
-// Both fall out of the same rule — the first non-bool ends the group — and a
-// parser that instead looked at whether a token starts with a dash would get
-// one of them wrong no matter which way it decided.
+// EN — The two cases that matter most are the last kind: "-p -2" must read -2
+// as a value, and "-pabc" must read "abc" as a value that then fails
+// conversion. Both fall out of the same rule — the first non-bool ends the
+// group — and a parser that instead looked at whether a token starts with a
+// dash would get one of them wrong no matter which way it decided.
+//
+// PT — Os dois casos que mais importam são do último tipo: "-p -2" tem que ler
+// -2 como valor, e "-pabc" tem que ler "abc" como valor que depois falha na
+// conversão. Os dois caem da mesma regra — a primeira não-booleana encerra o
+// grupo — e um parser que em vez disso olhasse se o token começa com hífen
+// erraria um dos dois, decidisse o que decidisse.
 func TestParseShortFlags(t *testing.T) {
 	root := &Command{
 		Name: "app",
@@ -194,8 +220,10 @@ func TestParseShortFlags(t *testing.T) {
 		},
 		{name: "unknown short", argv: []string{"-z"}, wantErr: true},
 		{name: "valued flag with nothing after it", argv: []string{"-p"}, wantErr: true},
-		// "-pabc" is p taking "abc" as its glued value, not four flags: the
+		// EN: "-pabc" is p taking "abc" as its glued value, not four flags — the
 		// first non-bool ends the group and swallows the rest of the token.
+		// PT: "-pabc" é p pegando "abc" como valor colado, não quatro flags — a
+		// primeira não-booleana encerra o grupo e engole o resto do token.
 		{name: "bad type in a group", argv: []string{"-pabc"}, wantErr: true},
 	}
 
@@ -221,8 +249,9 @@ func TestParseShortFlags(t *testing.T) {
 	}
 }
 
-// remoteTree is the tree the spec's acceptance test is written against, and it
-// is deliberately shaped to exercise the hard cases in one structure:
+// remoteTree is the tree the spec's acceptance test is written against.
+//
+// EN — It is deliberately shaped to exercise the hard cases in one structure:
 //
 //   - two levels of nesting (task remote add), so routing has to recurse
 //   - a persistent flag on the root (-v) that must reach the deepest leaf
@@ -231,6 +260,16 @@ func TestParseShortFlags(t *testing.T) {
 //
 // A tree that only exercised one of these would let the other three regress
 // silently.
+//
+// PT — Tem forma deliberada para exercitar os casos difíceis numa estrutura só:
+//
+//   - dois níveis de aninhamento (task remote add), para o roteamento recursar
+//   - uma flag persistente na raiz (-v) que precisa alcançar a folha mais funda
+//   - uma flag NÃO-persistente na raiz (-c) que NÃO pode alcançá-la
+//   - dois posicionais obrigatórios, para a ligação ter o que dividir
+//
+// Uma árvore que exercitasse só um desses deixaria os outros três regredirem em
+// silêncio.
 func remoteTree() *Command {
 	return &Command{
 		Name:  "task",
@@ -268,8 +307,12 @@ func remoteTree() *Command {
 // rather than being collected as a positional, and that the walk records where
 // it ended up.
 //
-// Path matters as much as Cmd: an error message that says "add" without saying
-// "task remote add" leaves the user with no idea where that command lives.
+// EN — Path matters as much as Cmd: an error message that says "add" without
+// saying "task remote add" leaves the user with no idea where that command
+// lives.
+//
+// PT — Path importa tanto quanto Cmd: uma mensagem de erro que diz "add" sem
+// dizer "task remote add" deixa o usuário sem ideia de onde esse comando mora.
 func TestParseRouting(t *testing.T) {
 	root := remoteTree()
 
@@ -288,8 +331,11 @@ func TestParseRouting(t *testing.T) {
 // TestParsePersistentFlagIsInherited and its counterpart below are a pair, and
 // neither means much alone.
 //
-// This one proves inheritance happens: -v is declared only on the root, typed
-// two levels down, and still resolves.
+// EN — This one proves inheritance happens: -v is declared only on the root,
+// typed two levels down, and still resolves.
+//
+// PT — Este prova que a herança acontece: -v é declarado só na raiz, digitado
+// dois níveis abaixo, e ainda assim resolve.
 func TestParsePersistentFlagIsInherited(t *testing.T) {
 	ctx, err := Parse(remoteTree(), []string{"remote", "add", "-v", "origin", "https://x"})
 	if err != nil {
@@ -303,9 +349,15 @@ func TestParsePersistentFlagIsInherited(t *testing.T) {
 // TestParseNonPersistFlagIsNotInherited proves inheritance is SELECTIVE, which
 // is the half that actually constrains the implementation.
 //
-// A descend that merely added the child's flags to the existing index would
-// pass the test above and fail this one: --config would stay visible forever.
-// Rebuilding the index from persistent-plus-own is what makes it disappear.
+// EN — A descend that merely added the child's flags to the existing index
+// would pass the test above and fail this one: --config would stay visible
+// forever. Rebuilding the index from persistent-plus-own is what makes it
+// disappear.
+//
+// PT — Um descend que apenas somasse as flags do filho ao índice existente
+// passaria no teste acima e falharia neste: --config ficaria visível para
+// sempre. Reconstruir o índice a partir de persistentes-mais-próprias é o que o
+// faz sumir.
 func TestParseNonPersistFlagIsNotInherited(t *testing.T) {
 	_, err := Parse(remoteTree(), []string{"remote", "add", "--config", "x"})
 	if err == nil {
@@ -316,9 +368,13 @@ func TestParseNonPersistFlagIsNotInherited(t *testing.T) {
 // TestParseTerminator pins the POSIX "--" convention: everything after it is a
 // positional, even when it looks exactly like a flag.
 //
-// Without it there is no way to pass a value that starts with a dash — a task
-// titled "--not-a-flag" would be unrepresentable. The two tokens here would
-// otherwise be an unknown long flag and an unknown short flag.
+// EN — Without it there is no way to pass a value that starts with a dash — a
+// task titled "--not-a-flag" would be unrepresentable. The two tokens here
+// would otherwise be an unknown long flag and an unknown short flag.
+//
+// PT — Sem ele não há como passar um valor que comece com hífen — uma tarefa
+// chamada "--not-a-flag" seria impossível de representar. Os dois tokens aqui
+// seriam, de outro modo, uma flag longa desconhecida e uma curta desconhecida.
 func TestParseTerminator(t *testing.T) {
 	ctx, err := Parse(remoteTree(), []string{"remote", "add", "--", "--not-a-flag", "-x"})
 	if err != nil {
@@ -333,9 +389,13 @@ func TestParseTerminator(t *testing.T) {
 // TestParseSubCommandAfterPositionalIsPositional pins the second — and last —
 // place where token order carries meaning.
 //
-// Routing stops for good at the first positional. Without that rule, a task
-// titled "remote" would silently route into the remote subcommand instead of
-// being stored, and the user would have no way to express the title at all.
+// EN — Routing stops for good at the first positional. Without that rule, a
+// task titled "remote" would silently route into the remote subcommand instead
+// of being stored, and the user would have no way to express the title at all.
+//
+// PT — O roteamento para de vez no primeiro posicional. Sem essa regra, uma
+// tarefa chamada "remote" rotearia calada para o subcomando remote em vez de ser
+// guardada, e o usuário não teria como expressar esse título de jeito nenhum.
 func TestParseSubCommandAfterPositionalIsPositional(t *testing.T) {
 	ctx, err := Parse(remoteTree(), []string{"origin", "remote"})
 	if err != nil {
@@ -349,8 +409,9 @@ func TestParseSubCommandAfterPositionalIsPositional(t *testing.T) {
 // TestAcceptance1 is the spec's starred acceptance test, and the gate for this
 // milestone.
 //
-// The three orders are the point. They are the same six pieces of information
-// arranged three ways, and all three must produce an identical Context:
+// EN — The three orders are the point. They are the same six pieces of
+// information arranged three ways, and all three must produce an identical
+// Context:
 //
 //	remote add --force -v origin https://x     flags first
 //	remote add origin --force https://x -v     interleaved
@@ -364,6 +425,22 @@ func TestParseSubCommandAfterPositionalIsPositional(t *testing.T) {
 // Validate is called first on purpose: an acceptance test written against a
 // malformed tree would be testing the wrong thing, and would fail in a way that
 // looks like a parser bug.
+//
+// PT — As três ordens são o ponto. São as mesmas seis informações arranjadas de
+// três jeitos, e as três precisam produzir um Context idêntico:
+//
+//	remote add --force -v origin https://x     flags primeiro
+//	remote add origin --force https://x -v     intercalado
+//	remote add -vf origin https://x            flags agrupadas num token só
+//
+// Essa comutatividade não é algo que o parser foi mandado fazer; ela cai de
+// classificar cada token independentemente do que veio antes. Só duas memórias
+// quebram a simetria — o terminador "--" e "nenhum posicional visto ainda" — e
+// nenhuma das duas é exercitada aqui.
+//
+// O Validate é chamado primeiro de propósito: um teste de aceite escrito contra
+// árvore malformada estaria testando a coisa errada, e falharia de um jeito que
+// parece bug do parser.
 func TestAcceptance1(t *testing.T) {
 	root := remoteTree()
 	if err := root.Validate(); err != nil {
@@ -404,11 +481,18 @@ func TestAcceptance1(t *testing.T) {
 // TestAcceptance1UnknownFlagMentionsTheCommand is the other half of the spec's
 // first criterion: a rejected flag must say WHERE it was rejected.
 //
-// Asserting on the message text is normally a bad idea — wording changes are
-// not behavior changes — but the substring checked here is not wording. It is
-// the full command path, and it can only appear if the error was built with the
-// walk's Path rather than with the leaf's name. "unknown flag --nope in add"
-// would pass a naive test and leave the user hunting for which "add".
+// EN — Asserting on the message text is normally a bad idea — wording changes
+// are not behavior changes — but the substring checked here is not wording. It
+// is the full command path, and it can only appear if the error was built with
+// the walk's Path rather than with the leaf's name. "unknown flag --nope in
+// add" would pass a naive test and leave the user hunting for which "add".
+//
+// PT — Afirmar sobre o texto da mensagem normalmente é má ideia — mudança de
+// redação não é mudança de comportamento — mas o trecho conferido aqui não é
+// redação. É o caminho completo do comando, e ele só pode aparecer se o erro foi
+// construído com o Path da travessia em vez do nome da folha. "unknown flag
+// --nope in add" passaria num teste ingênuo e deixaria o usuário caçando qual
+// "add".
 func TestAcceptance1UnknownFlagMentionsTheCommand(t *testing.T) {
 	_, err := Parse(remoteTree(), []string{"remote", "add", "--nope"})
 	if err == nil {
