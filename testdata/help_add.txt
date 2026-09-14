@@ -1,0 +1,10 @@
+create a task
+
+Usage: task add [flags] <title>
+
+Flags:
+      --due string     due date, YYYY-MM-DD (default: "")
+  -p, --priority int   priority from 1 (high) to 5 (low) (default: 3)
+
+Global Flags:
+  -v, --verbose   verbose output (default: false)

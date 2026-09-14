@@ -1,6 +1,12 @@
 package argvine
 
-import "testing"
+import (
+	"flag"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // helpTree is the fixture the whole help milestone is rendered against.
 //
@@ -210,5 +216,174 @@ func TestSplitFlags(t *testing.T) {
 	ownRoot, inheritedRoot := splitFlags([]*Command{root})
 	if len(ownRoot) != 1 || len(inheritedRoot) != 0 {
 		t.Errorf("root: own = %d, inherited = %d; want 1 and 0", len(ownRoot), len(inheritedRoot))
+	}
+}
+
+// updateGolden rewrites the files in testdata instead of comparing against
+// them: go test ./... -update
+//
+// EN — The flag is what keeps golden files cheap to maintain. The discipline it
+// requires is reading the resulting diff before committing it — an -update that
+// is run reflexively turns a regression test into a rubber stamp.
+//
+// PT — A flag é o que mantém golden files baratos de manter. A disciplina que
+// ela exige é ler o diff resultante antes de commitar — um -update rodado por
+// reflexo transforma um teste de regressão em carimbo.
+var updateGolden = flag.Bool("update", false, "rewrite golden files in testdata")
+
+// TestHelpGolden compares rendered help against files checked into testdata.
+//
+// EN — Why golden files instead of strings.Contains assertions: Contains tests
+// that something IS there, and help is about HOW it is there. Broken column
+// alignment, unstable ordering, a blank line too many, "Global Flags" glued to
+// the section above — none of that fails a Contains, and all of it is exactly
+// what makes a help screen bad.
+//
+// The golden also buys regression coverage for free: touching renderFlags and
+// accidentally breaking another command's padding shows up in the diff
+// immediately.
+//
+// The files MUST be committed. Ignoring testdata would make this test fail on a
+// fresh clone with "reading golden: no such file", and delete the protection
+// entirely.
+//
+// PT — Por que golden file em vez de asserções com strings.Contains: o Contains
+// testa que algo ESTÁ lá, e help é sobre COMO está lá. Alinhamento de coluna
+// quebrado, ordenação instável, uma linha em branco a mais, "Global Flags"
+// colada na seção acima — nada disso falha um Contains, e é tudo exatamente o
+// que torna uma tela de help ruim.
+//
+// O golden também dá cobertura de regressão de graça: mexer no renderFlags e
+// quebrar sem querer o padding de outro comando aparece no diff na hora.
+//
+// Os arquivos TÊM que ser versionados. Ignorar testdata faria este teste falhar
+// num clone limpo com "reading golden: no such file", e apagaria a proteção.
+func TestHelpGolden(t *testing.T) {
+	root := helpTree()
+
+	tests := []struct {
+		golden string
+		path   []*Command
+	}{
+		// EN: Three shapes, three different section combinations:
+		//   root   → Commands + Flags, no Global Flags (nothing above it)
+		//   add    → Flags + Global Flags, no Commands (it is a leaf)
+		//   remote → Commands + Global Flags, no Flags (declares none of its own)
+		// Together they prove every section is skipped when empty rather than
+		// printed as a bare heading.
+		// PT: Três formas, três combinações de seção diferentes:
+		//   root   → Commands + Flags, sem Global Flags (nada acima dele)
+		//   add    → Flags + Global Flags, sem Commands (é folha)
+		//   remote → Commands + Global Flags, sem Flags (não declara nenhuma)
+		// Juntos provam que toda seção é pulada quando vazia em vez de impressa
+		// como título sozinho.
+		{golden: "help_root.txt", path: []*Command{root}},
+		{golden: "help_add.txt", path: []*Command{root, root.findSub("add")}},
+		{golden: "help_remote.txt", path: []*Command{root, root.findSub("remote")}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.golden, func(t *testing.T) {
+			got := Help(tt.path)
+			file := filepath.Join("testdata", tt.golden)
+
+			if *updateGolden {
+				if err := os.WriteFile(file, []byte(got), 0o644); err != nil {
+					t.Fatalf("writing golden: %v", err)
+				}
+				return
+			}
+
+			want, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatalf("reading golden (run: go test ./... -update): %v", err)
+			}
+			// EN: Both sides are printed whole. A "help did not match" message
+			// would send you to the file; printing got and want side by side
+			// makes the difference visible in the test output itself.
+			// PT: Os dois lados são impressos inteiros. Uma mensagem "help não
+			// bateu" mandaria você ao arquivo; imprimir got e want lado a lado
+			// deixa a diferença visível na própria saída do teste.
+			if got != string(want) {
+				t.Errorf("Help() mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+			}
+		})
+	}
+}
+
+// TestHelpIsStable renders the same tree many times and demands byte-identical
+// output.
+//
+// EN — This exists because of one specific Go behaviour: map iteration order is
+// randomised on purpose, and it varies between runs of the same binary. Any
+// rendering path that iterated a map instead of a sorted slice would produce
+// help that reshuffles itself — and would pass a single-run golden test roughly
+// half the time.
+//
+// Twenty iterations is not a proof, it is a trap. A flaky test that fails once
+// in twenty runs is worse than useless; this one fails almost immediately if
+// non-determinism is ever introduced, which is what makes it worth having.
+//
+// PT — Isto existe por um comportamento específico de Go: a ordem de iteração de
+// mapa é aleatorizada de propósito, e varia entre execuções do mesmo binário.
+// Qualquer caminho de renderização que iterasse um mapa em vez de uma slice
+// ordenada produziria help que se embaralha sozinho — e passaria num golden de
+// execução única mais ou menos metade das vezes.
+//
+// Vinte iterações não é prova, é armadilha. Um teste instável que falha uma vez
+// em vinte é pior que inútil; este falha quase de imediato se
+// não-determinismo for introduzido, e é isso que o faz valer a pena.
+func TestHelpIsStable(t *testing.T) {
+	root := helpTree()
+	for i := 0; i < 20; i++ {
+		if Help([]*Command{root}) != Help([]*Command{root}) {
+			t.Fatal("Help() is not deterministic")
+		}
+	}
+}
+
+// TestHelpHasNoHardcodedPerCommandText is the test that guards the design
+// decision the whole milestone exists for.
+//
+// EN — It adds a flag to the tree at runtime — something no CLI author would
+// ever do — and demands it appear in the help with nothing else edited. That is
+// only possible if help is DERIVED from the tree rather than written alongside
+// it.
+//
+// It is the executable form of the rule in the plan: if someone ever adds a
+// HelpText field to Command, or a per-command template, this test breaks. And
+// it should, because that field starts correct and rots on the first flag
+// anyone adds afterwards.
+//
+// Note the mutation is safe here: helpTree() builds a fresh tree per call, so
+// appending to add.Flags cannot leak into another test.
+//
+// PT — Ele acrescenta uma flag à árvore em tempo de execução — algo que nenhum
+// autor de CLI faria — e exige que ela apareça no help sem mais nada editado.
+// Isso só é possível se o help for DERIVADO da árvore em vez de escrito ao lado
+// dela.
+//
+// É a forma executável da regra do plano: se alguém um dia acrescentar um campo
+// HelpText ao Command, ou um template por comando, este teste quebra. E deve
+// quebrar, porque esse campo nasce correto e apodrece na primeira flag que
+// alguém adicionar depois.
+//
+// Note que a mutação é segura aqui: helpTree() constrói uma árvore nova a cada
+// chamada, então dar append em add.Flags não vaza para outro teste.
+func TestHelpHasNoHardcodedPerCommandText(t *testing.T) {
+	root := helpTree()
+	add := root.findSub("add")
+	add.Flags = append(add.Flags, Flag{
+		Name: "tag", Short: "t", Type: String, Default: "", Usage: "attach a tag",
+	})
+
+	out := Help([]*Command{root, add})
+
+	// EN: Both the label and the description are checked. A renderer that
+	// listed flag names but dropped Usage would pass on "--tag" alone.
+	// PT: Tanto o rótulo quanto a descrição são conferidos. Um renderizador que
+	// listasse nomes de flag mas perdesse o Usage passaria só com "--tag".
+	if !strings.Contains(out, "--tag") || !strings.Contains(out, "attach a tag") {
+		t.Errorf("a newly declared flag must appear in help automatically; got:\n%s", out)
 	}
 }

@@ -1,0 +1,9 @@
+manage remotes
+
+Usage: task remote <command> [flags]
+
+Commands:
+  add   add a remote
+
+Global Flags:
+  -v, --verbose   verbose output (default: false)

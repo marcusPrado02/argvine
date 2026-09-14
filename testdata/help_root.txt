@@ -1,0 +1,12 @@
+task keeps a list to do in a local JSON file.
+
+Usage: task <command> [flags]
+
+Commands:
+  add      create a task
+  done     close tasks
+  list     list tasks
+  remote   manage remotes
+
+Flags:
+  -v, --verbose   verbose output (default: false)
