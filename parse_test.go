@@ -1,6 +1,7 @@
 package argvine
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -396,14 +397,68 @@ func TestParseTerminator(t *testing.T) {
 // PT — O roteamento para de vez no primeiro posicional. Sem essa regra, uma
 // tarefa chamada "remote" rotearia calada para o subcomando remote em vez de ser
 // guardada, e o usuário não teria como expressar esse título de jeito nenhum.
+//
+// EN — Two ways to observe the same rule, because leftover positionals stopped
+// being silent once the typed usage errors arrived:
+//
+//   - on a tree that ACCEPTS positionals, Parse succeeds and the second token
+//     lands in the argument list instead of routing;
+//   - on a tree that does NOT, Parse fails — and the error's PATH is what tells
+//     the two worlds apart. Both produce ErrUnknownCommand{Got: "origin"}; only
+//     a parser that wrongly resumed routing would report it from "task remote".
+//
+// PT — Dois jeitos de observar a mesma regra, porque posicionais que sobram
+// deixaram de ser silenciosos quando os erros tipados chegaram:
+//
+//   - numa árvore que ACEITA posicionais, o Parse dá certo e o segundo token vai
+//     parar na lista de argumentos em vez de rotear;
+//   - numa que NÃO aceita, o Parse falha — e é o CAMINHO do erro que separa os
+//     dois mundos. Os dois produzem ErrUnknownCommand{Got: "origin"}; só um
+//     parser que retomasse a rota indevidamente reportaria de "task remote".
 func TestParseSubCommandAfterPositionalIsPositional(t *testing.T) {
-	ctx, err := Parse(remoteTree(), []string{"origin", "remote"})
-	if err != nil {
-		t.Fatalf("Parse returned %v", err)
-	}
-	if ctx.Cmd.Name != "task" {
-		t.Errorf("Cmd.Name = %q, want \"task\": routing must not resume after a positional", ctx.Cmd.Name)
-	}
+	t.Run("a node that accepts positionals keeps the token as an argument", func(t *testing.T) {
+		// EN: Many on the root absorbs both tokens, so there is nothing left
+		// over and Parse can succeed — which lets us assert on Cmd directly.
+		// PT: Many na raiz absorve os dois tokens, então nada sobra e o Parse
+		// pode dar certo — o que nos deixa afirmar sobre Cmd diretamente.
+		root := &Command{
+			Name: "app",
+			Args: []Arg{{Name: "items", Arity: Many}},
+			Sub:  []*Command{{Name: "remote"}},
+		}
+
+		ctx, err := Parse(root, []string{"origin", "remote"})
+		if err != nil {
+			t.Fatalf("Parse returned %v", err)
+		}
+		if ctx.Cmd.Name != "app" {
+			t.Errorf("Cmd.Name = %q, want \"app\": routing must not resume after a positional", ctx.Cmd.Name)
+		}
+		if got := ctx.ArgList("items"); len(got) != 2 || got[1] != "remote" {
+			t.Errorf("ArgList(\"items\") = %v, want [origin remote]: \"remote\" is an argument here, not a route", got)
+		}
+	})
+
+	t.Run("a node that does not keeps the walk where it was", func(t *testing.T) {
+		// EN: remoteTree's root declares no Args, so both tokens are leftovers
+		// and Parse fails. PathString is the discriminator: "task" means the
+		// walk never descended; "task remote" would mean routing resumed.
+		// PT: A raiz da remoteTree não declara Args, então os dois tokens sobram
+		// e o Parse falha. O PathString é o discriminante: "task" significa que
+		// a varredura nunca desceu; "task remote" significaria rota retomada.
+		_, err := Parse(remoteTree(), []string{"origin", "remote"})
+
+		var e *ErrUnknownCommand
+		if !errors.As(err, &e) {
+			t.Fatalf("got %v (%T), want *ErrUnknownCommand", err, err)
+		}
+		if got := e.PathString(); got != "task" {
+			t.Errorf("PathString() = %q, want \"task\": routing must not resume after a positional", got)
+		}
+		if e.Got != "origin" {
+			t.Errorf("Got = %q, want \"origin\": the first unclaimed token is reported", e.Got)
+		}
+	})
 }
 
 // TestAcceptance1 is the spec's starred acceptance test, and the gate for this

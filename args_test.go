@@ -157,3 +157,89 @@ func TestBindArgsArity(t *testing.T) {
 		})
 	}
 }
+
+// TestLeftoverPositionals covers the last gap in the parser: a token that no
+// declared Arg claimed.
+//
+// EN — The situation is one thing; the diagnosis is two, and which one you get
+// depends on the shape of the node the walk stopped at:
+//
+//	"task remote nope"      → remote HAS children  → ErrUnknownCommand
+//	"task remote add a b c" → add is a leaf        → ErrUnexpectedArg
+//
+// The test for whether two errors should be one: does the user do the same
+// thing next? Here they do not — one goes looking for the list of subcommands,
+// the other deletes an argument — so they are two types. A single "unexpected
+// token" would be correct and useless.
+//
+// The third subtest is the negative space: a leaf ending in Many can never
+// reach the leftover branch at all, because Many empties rest by definition.
+// Without it, an implementation that reported leftovers BEFORE binding args
+// would pass the first two and break every Many command.
+//
+// PT — A situação é uma; o diagnóstico são dois, e qual deles você recebe
+// depende da forma do nó onde a varredura parou:
+//
+//	"task remote nope"      → remote TEM filhos → ErrUnknownCommand
+//	"task remote add a b c" → add é folha       → ErrUnexpectedArg
+//
+// O teste para saber se dois erros deveriam ser um só: o usuário faz a mesma
+// coisa em seguida? Aqui não — um vai procurar a lista de subcomandos, o outro
+// apaga um argumento — então são dois tipos. Um "token inesperado" único seria
+// correto e inútil.
+//
+// O terceiro subteste é o espaço negativo: uma folha terminada em Many nunca
+// alcança o ramo de sobra, porque Many esvazia o rest por definição. Sem ele,
+// uma implementação que reportasse sobras ANTES de ligar os args passaria nos
+// dois primeiros e quebraria todo comando com Many.
+func TestLeftoverPositionals(t *testing.T) {
+	t.Run("token on a node with subcommands is an unknown command", func(t *testing.T) {
+		_, err := Parse(remoteTree(), []string{"remote", "nope"})
+
+		var e *ErrUnknownCommand
+		if !errors.As(err, &e) {
+			t.Fatalf("got %v (%T), want *ErrUnknownCommand", err, err)
+		}
+		if e.Got != "nope" {
+			t.Errorf("Got = %q, want \"nope\"", e.Got)
+		}
+		// EN: "task remote", not "task" — the error is reported from where the
+		// walk actually stopped, which is the node whose children the user was
+		// trying to name.
+		// PT: "task remote", não "task" — o erro é reportado de onde a varredura
+		// de fato parou, que é o nó cujos filhos o usuário tentava nomear.
+		if got := e.PathString(); got != "task remote" {
+			t.Errorf("PathString() = %q, want \"task remote\"", got)
+		}
+	})
+
+	t.Run("extra token on a leaf is an unexpected argument", func(t *testing.T) {
+		_, err := Parse(remoteTree(), []string{"remote", "add", "a", "b", "c"})
+
+		var e *ErrUnexpectedArg
+		if !errors.As(err, &e) {
+			t.Fatalf("got %v (%T), want *ErrUnexpectedArg", err, err)
+		}
+		// EN: "add" declares two Args, so "a" and "b" are claimed and "c" is the
+		// first unclaimed token — the exact place the command line stopped
+		// making sense.
+		// PT: "add" declara dois Args, então "a" e "b" são reivindicados e "c" é
+		// o primeiro token não reivindicado — exatamente onde a linha de comando
+		// deixou de fazer sentido.
+		if e.Got != "c" {
+			t.Errorf("Got = %q, want \"c\"", e.Got)
+		}
+	})
+
+	// EN: The negative case. Four tokens for one Arg is not "too many" when that
+	// Arg is Many — it is the whole point. This guards the ordering inside
+	// bindArgs: the leftover check must come AFTER binding, never before.
+	// PT: O caso negativo. Quatro tokens para um Arg não é "demais" quando esse
+	// Arg é Many — é justamente o objetivo. Isto protege a ordem dentro do
+	// bindArgs: a checagem de sobra tem que vir DEPOIS da ligação, nunca antes.
+	t.Run("a leaf that declares Many never has leftovers", func(t *testing.T) {
+		if _, err := Parse(argsTree(), []string{"many", "1", "2", "3", "4"}); err != nil {
+			t.Fatalf("Many should absorb every leftover: %v", err)
+		}
+	})
+}

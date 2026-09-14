@@ -723,11 +723,36 @@ func (p *parser) bindArgs() error {
 			rest = nil
 		}
 	}
-
-	// EN: Tokens left in rest are still unhandled. That is the next task, and
-	// the error it raises depends on whether this node has subcommands.
-	// PT: Tokens que sobraram em rest ainda não são tratados. Isso é a próxima
-	// tarefa, e o erro depende de este nó ter ou não subcomandos.
+	// EN: Anything still in rest was claimed by no Arg, and which error that is
+	// depends on the shape of the node — because the user's next move does.
+	//
+	//	node HAS subcommands → "I got the subcommand name wrong, show the list"
+	//	node is a leaf       → "the command was right, I passed one arg too many"
+	//
+	// Only rest[0] is reported: the first unclaimed token is where the command
+	// line stopped making sense, and listing the rest would bury that.
+	//
+	// A leaf whose last Arg is Many never reaches here, because Many empties
+	// rest by definition.
+	//
+	// PT: Qualquer coisa ainda em rest não foi reivindicada por nenhum Arg, e
+	// qual erro é isso depende da forma do nó — porque a ação seguinte do
+	// usuário depende.
+	//
+	//	nó TEM subcomandos → "errei o nome do subcomando, me mostre a lista"
+	//	nó é folha         → "o comando estava certo, passei um argumento a mais"
+	//
+	// Só rest[0] é reportado: o primeiro token não reivindicado é onde a linha
+	// de comando deixou de fazer sentido, e listar o resto enterraria isso.
+	//
+	// Uma folha cujo último Arg é Many nunca chega aqui, porque Many esvazia o
+	// rest por definição.
+	if len(rest) > 0 {
+		if len(p.cur.Sub) > 0 {
+			return &ErrUnknownCommand{p.at(), rest[0]}
+		}
+		return &ErrUnexpectedArg{p.at(), rest[0]}
+	}
 	return nil
 }
 
