@@ -222,3 +222,25 @@ func (c *Context) lookupArg(name string) []string {
 func (c *Context) positionalsForTest() []string {
 	return c.rawPositional
 }
+
+// Help renders the help text of the parsed command.
+//
+// EN — Handlers use it to print usage on their own terms — a node that is a
+// namespace with no Run, for instance, prints this and exits. The package
+// itself still never prints: this returns the string and the caller decides
+// where it goes and what exit code follows.
+//
+// It is the success-path twin of usageError.Help(): one for when parsing
+// worked, one for when it did not, both rendering from the same Path.
+//
+// PT — Handlers usam isto para imprimir o uso nos próprios termos — um nó que é
+// namespace sem Run, por exemplo, imprime isto e sai. O pacote em si continua
+// nunca imprimindo: a função devolve a string e quem chama decide para onde ela
+// vai e qual código de saída vem depois.
+//
+// É o gêmeo do usageError.Help() no caminho de sucesso: um para quando o parsing
+// deu certo, outro para quando não deu, os dois renderizando a partir do mesmo
+// Path.
+func (c *Context) Help() string {
+	return Help(c.Path)
+}

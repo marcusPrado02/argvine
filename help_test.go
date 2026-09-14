@@ -1,6 +1,7 @@
 package argvine
 
 import (
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -385,5 +386,139 @@ func TestHelpHasNoHardcodedPerCommandText(t *testing.T) {
 	// listasse nomes de flag mas perdesse o Usage passaria só com "--tag".
 	if !strings.Contains(out, "--tag") || !strings.Contains(out, "attach a tag") {
 		t.Errorf("a newly declared flag must appear in help automatically; got:\n%s", out)
+	}
+}
+
+// TestHelpRequested checks that --help and -h stop the parse at the right node
+// and render that node's help.
+//
+// EN — Three things are asserted per case, and each one guards a different
+// mistake:
+//
+//   - errors.As finds *ErrHelpRequested → the sentinel travels through the
+//     error channel and main can tell it apart from a real failure
+//   - PathString is the node where --help appeared → not the root, not the leaf
+//     the walk might have reached later
+//   - Help() renders "Usage: <that path>" → the sentinel carries enough to
+//     produce the right text, not just the fact that help was asked for
+//
+// "before a required arg is given" duplicates an earlier argv on purpose. The
+// name is the assertion: "task add" declares <title> as required, and asking
+// for help must NOT complain about it. If the interception ever moved out of
+// the token loop and below bindArgs, only this case would catch it.
+//
+// PT — Três coisas são afirmadas por caso, e cada uma protege de um engano
+// diferente:
+//
+//   - errors.As encontra *ErrHelpRequested → o sentinela viaja pelo canal de
+//     erro e a main consegue distingui-lo de uma falha de verdade
+//   - PathString é o nó onde o --help apareceu → não a raiz, nem a folha que a
+//     varredura poderia ter alcançado depois
+//   - Help() renderiza "Usage: <aquele caminho>" → o sentinela carrega o
+//     suficiente para produzir o texto certo, não só o fato de terem pedido ajuda
+//
+// "before a required arg is given" duplica um argv anterior de propósito. O nome
+// é a asserção: "task add" declara <title> como obrigatório, e pedir ajuda NÃO
+// pode reclamar disso. Se a interceptação um dia saísse do laço de tokens para
+// abaixo do bindArgs, só este caso pegaria.
+func TestHelpRequested(t *testing.T) {
+	root := helpTree()
+
+	tests := []struct {
+		name     string
+		argv     []string
+		wantPath string
+	}{
+		{name: "long form at root", argv: []string{"--help"}, wantPath: "task"},
+		{name: "short form at root", argv: []string{"-h"}, wantPath: "task"},
+		{name: "on a subcommand", argv: []string{"add", "--help"}, wantPath: "task add"},
+		{name: "on a nested subcommand", argv: []string{"remote", "add", "--help"}, wantPath: "task remote add"},
+		{name: "before a required arg is given", argv: []string{"add", "--help"}, wantPath: "task add"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(root, tt.argv)
+
+			var help *ErrHelpRequested
+			if !errors.As(err, &help) {
+				t.Fatalf("Parse(%v) = %v (%T), want *ErrHelpRequested", tt.argv, err, err)
+			}
+			if got := help.PathString(); got != tt.wantPath {
+				t.Errorf("PathString() = %q, want %q", got, tt.wantPath)
+			}
+			if !strings.Contains(help.Help(), "Usage: "+tt.wantPath) {
+				t.Errorf("Help() should render the usage line for %q; got:\n%s", tt.wantPath, help.Help())
+			}
+		})
+	}
+}
+
+// TestUsageErrorsExposeHelp proves the embedding pays off on the failure path
+// too, not just for the help sentinel.
+//
+// EN — ErrUnknownFlag never declares a Help method. It gets one from the
+// embedded usageError, and so does every other error in the package. That is
+// what lets a main print the right usage without a switch over eight types:
+// catch any error, ask it for Help(), print.
+//
+// The assertion is "Usage: task add", not the root's — an error must render the
+// help of the command it happened on, or the user gets a page about the wrong
+// thing.
+//
+// PT — ErrUnknownFlag nunca declara um método Help. Ele ganha um da usageError
+// embutida, e todo outro erro do pacote também. É isso que permite a uma main
+// imprimir o uso certo sem um switch sobre oito tipos: pegue qualquer erro, peça
+// o Help() dele, imprima.
+//
+// A asserção é "Usage: task add", não a da raiz — um erro precisa renderizar o
+// help do comando em que aconteceu, ou o usuário recebe uma página sobre outra
+// coisa.
+func TestUsageErrorsExposeHelp(t *testing.T) {
+	_, err := Parse(helpTree(), []string{"add", "--nope"})
+
+	var uf *ErrUnknownFlag
+	if !errors.As(err, &uf) {
+		t.Fatalf("got %T, want *ErrUnknownFlag", err)
+	}
+	if !strings.Contains(uf.Help(), "Usage: task add") {
+		t.Errorf("a usage error must be able to render the help of its own command; got:\n%s", uf.Help())
+	}
+}
+
+// TestDeclaredHelpFlagWins is the escape hatch: interception applies only to a
+// --help the CLI did NOT declare.
+//
+// EN — The condition in longFlag reads "the lookup failed AND the name is
+// help", and the order is the whole point. A framework that grabbed --help
+// unconditionally would make it impossible to build "app --help networking",
+// and the author would have no way to opt out.
+//
+// The flag here is deliberately a String, not a Bool: if interception were
+// still winning, Parse would return ErrHelpRequested and "networking" would
+// never be consumed as a value. Asserting on the VALUE, not just on err == nil,
+// is what makes the case airtight.
+//
+// PT — A condição no longFlag é "a busca falhou E o nome é help", e a ordem é o
+// ponto inteiro. Um framework que tomasse --help incondicionalmente tornaria
+// impossível construir "app --help networking", e o autor não teria como sair
+// disso.
+//
+// A flag aqui é String de propósito, não Bool: se a interceptação ainda
+// estivesse ganhando, o Parse devolveria ErrHelpRequested e "networking" nunca
+// seria consumido como valor. Afirmar sobre o VALOR, e não só sobre err == nil,
+// é o que deixa o caso à prova.
+func TestDeclaredHelpFlagWins(t *testing.T) {
+	root := &Command{
+		Name:  "app",
+		Flags: []Flag{{Name: "help", Short: "h", Type: String, Default: "", Usage: "topic"}},
+	}
+
+	ctx, err := Parse(root, []string{"--help", "networking"})
+	if err != nil {
+		t.Fatalf("a declared --help must be parsed as a normal flag: %v", err)
+	}
+	if got := ctx.String("help"); got != "networking" {
+		t.Errorf("String(\"help\") = %q, want \"networking\"", got)
 	}
 }

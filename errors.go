@@ -24,10 +24,10 @@ import (
 
 // usageError is embedded in every usage error below.
 //
-// EN — Eight error types need the same field and the same three methods. There
+// EN — Nine error types need the same field and the same three methods. There
 // were three ways to do that:
 //
-//	repeat the field eight times → where the ninth one forgets a case
+//	repeat the field nine times  → where the tenth one forgets a case
 //	declare an interface         → describes the behaviour without providing it
 //	embed a struct               → gives field AND methods, for free
 //
@@ -38,10 +38,10 @@ import (
 // sees *ErrUnknownFlag, can call PathString on it, and never has to learn where
 // that method came from.
 //
-// PT — Oito tipos de erro precisam do mesmo campo e dos mesmos três métodos.
+// PT — Nove tipos de erro precisam do mesmo campo e dos mesmos três métodos.
 // Havia três jeitos:
 //
-//	repetir o campo oito vezes → onde o nono esquece um caso
+//	repetir o campo nove vezes → onde o décimo esquece um caso
 //	declarar uma interface     → descreve o comportamento sem fornecê-lo
 //	embutir uma struct         → dá campo E métodos, de graça
 //
@@ -252,4 +252,85 @@ type ErrUnexpectedArg struct {
 
 func (e *ErrUnexpectedArg) Error() string {
 	return fmt.Sprintf("unexpected argument %q for %q%s", e.Got, e.PathString(), e.hint())
+}
+
+// Help renders the help text of the command where the error happened.
+//
+// EN — Every usage error inherits this through the embedded usageError, which
+// is the payoff of that embedding: a caller holding any error from this package
+// can print the right help without knowing which error it caught.
+//
+//	fmt.Fprintln(os.Stderr, err)
+//	fmt.Fprint(os.Stderr, err.(interface{ Help() string }).Help())
+//
+// Note this is the one place errors.go reaches into help.go. It is not the
+// parse/help/completion coupling the design forbids — those three still do not
+// know about each other; this is the presentation layer asking the renderer for
+// text, which is exactly what it is for.
+//
+// PT — Todo erro de uso herda isto pela usageError embutida, que é o retorno do
+// embedding: quem chama, segurando qualquer erro deste pacote, consegue imprimir
+// o help certo sem saber qual erro pegou.
+//
+//	fmt.Fprintln(os.Stderr, err)
+//	fmt.Fprint(os.Stderr, err.(interface{ Help() string }).Help())
+//
+// Note que este é o único ponto em que errors.go alcança help.go. Não é o
+// acoplamento parse/help/completion que o design proíbe — esses três continuam
+// sem se conhecer; isto é a camada de apresentação pedindo texto ao
+// renderizador, que é exatamente para o que ela serve.
+func (u usageError) Help() string {
+	return Help(u.Path)
+}
+
+// ErrHelpRequested reports that --help or -h appeared on the command line.
+//
+// EN — It is a SENTINEL, not a failure. The user asked for help and got help;
+// nothing went wrong. Returning it as an error is a deliberate reuse of the
+// error channel, for one reason: Parse already has exactly one early-exit path,
+// and adding a second — a valid Context carrying a HelpRequested bool — would
+// force every caller to test two conditions, in the right order, forever.
+//
+// With the sentinel, main stays one error check with two outcomes:
+//
+//	ctx, err := argvine.Parse(root, os.Args[1:])
+//	if err != nil {
+//	    var help *argvine.ErrHelpRequested
+//	    if errors.As(err, &help) {
+//	        fmt.Print(help.Help())
+//	        os.Exit(0)          // zero: this was not a failure
+//	    }
+//	    fmt.Fprintln(os.Stderr, err)
+//	    os.Exit(1)
+//	}
+//
+// Same pattern as io.EOF: an error value that means "stop and hand control
+// back", not "something broke".
+//
+// PT — É um SENTINELA, não uma falha. O usuário pediu ajuda e recebeu ajuda;
+// nada deu errado. Devolvê-lo como erro é reúso deliberado do canal de erro, por
+// uma razão: o Parse já tem exatamente um caminho de saída antecipada, e
+// acrescentar um segundo — um Context válido carregando um bool HelpRequested —
+// obrigaria todo chamador a testar duas condições, na ordem certa, para sempre.
+//
+// Com o sentinela, a main continua sendo uma checagem de erro com dois
+// desfechos, e códigos de saída distintos.
+//
+// Mesmo padrão do io.EOF: um valor de erro que significa "pare e devolva o
+// controle", não "algo quebrou".
+type ErrHelpRequested struct {
+	usageError
+}
+
+// Error satisfies the error interface but is not meant to be shown to anyone.
+//
+// EN — The caller is expected to detect this type and print Help() instead. The
+// text exists so that a caller which forgets to branch prints something
+// self-explanatory rather than "<nil>".
+//
+// PT — Espera-se que quem chama detecte este tipo e imprima Help() no lugar. O
+// texto existe para que um chamador que esqueça de ramificar imprima algo
+// autoexplicativo em vez de "<nil>".
+func (e *ErrHelpRequested) Error() string {
+	return "help requested for " + e.PathString()
 }

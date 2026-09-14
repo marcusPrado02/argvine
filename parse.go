@@ -383,6 +383,28 @@ func (p *parser) longFlag() error {
 
 	f, ok := p.visible.byName[name]
 	if !ok {
+		// EN: --help is intercepted only when the CLI did NOT declare it. The
+		// lookup above already failed, so reaching here means no such flag
+		// exists on this command — and a CLI that declares its own --help (say,
+		// taking a topic name) keeps full control of it.
+		//
+		// The position matters as much as the condition: this sits inside the
+		// token loop, so it fires before validateFlags and bindArgs ever run.
+		// "task add --help" must not complain about a missing <title> — someone
+		// asking for help does not yet know what that argument is.
+		//
+		// PT: --help é interceptado só quando a CLI NÃO o declarou. A busca
+		// acima já falhou, então chegar aqui significa que não existe tal flag
+		// neste comando — e uma CLI que declara o próprio --help (recebendo um
+		// tópico, digamos) mantém controle total dele.
+		//
+		// A posição importa tanto quanto a condição: isto fica dentro do laço de
+		// tokens, então dispara antes de validateFlags e bindArgs rodarem.
+		// "task add --help" não pode reclamar de <title> faltando — quem pede
+		// ajuda ainda não sabe que argumento é esse.
+		if name == "help" {
+			return &ErrHelpRequested{p.at()}
+		}
 		return &ErrUnknownFlag{p.at(), "--" + name}
 	}
 
@@ -536,6 +558,17 @@ func (p *parser) shortGroup() error {
 
 		f, ok := p.visible.byShort[ch]
 		if !ok {
+			// EN: The short form, same rule as --help above: intercepted only
+			// when undeclared. Note this fires mid-group too — "-vh" marks
+			// verbose and then asks for help, which is what a user typing it
+			// would expect.
+			// PT: A forma curta, mesma regra do --help acima: interceptada só
+			// quando não declarada. Note que dispara no meio do grupo também —
+			// "-vh" marca verbose e então pede ajuda, que é o que um usuário
+			// digitando isso esperaria.
+			if ch == "h" {
+				return &ErrHelpRequested{p.at()}
+			}
 			return &ErrUnknownFlag{p.at(), "-" + ch}
 		}
 
