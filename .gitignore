@@ -34,3 +34,6 @@ go.work.sum
 
 docs/design
 docs/plan
+
+# Compiled example CLI
+/task
